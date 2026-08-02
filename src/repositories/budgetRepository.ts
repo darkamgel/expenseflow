@@ -1,17 +1,49 @@
 import type { Budget } from '../types';
 import { BaseRepository } from './baseRepository';
 import { withRepositoryErrorHandling } from './errors';
-import { getDatabase } from '../db/database';
+import { supabase } from '../supabase/client';
+import type { Database } from '../supabase/database.types';
 
-class BudgetRepository extends BaseRepository<Budget> {
+type BudgetRow = Database['public']['Tables']['budgets']['Row'];
+
+class BudgetRepository extends BaseRepository<Budget, BudgetRow> {
   constructor() {
     super('budgets', 'budget');
   }
 
+  protected toRecord(row: BudgetRow): Budget {
+    return {
+      id: row.id,
+      year: row.year,
+      month: row.month,
+      totalAmount: row.total_amount,
+      notes: row.notes ?? undefined,
+      rolloverEnabled: row.rollover_enabled,
+      isSample: row.is_sample,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  protected toRow(record: Budget): Record<string, unknown> {
+    return {
+      id: record.id,
+      year: record.year,
+      month: record.month,
+      total_amount: record.totalAmount,
+      notes: record.notes ?? null,
+      rollover_enabled: record.rolloverEnabled,
+      is_sample: record.isSample ?? false,
+      created_at: record.createdAt,
+      updated_at: record.updatedAt,
+    };
+  }
+
   async getForMonth(year: number, month: number): Promise<Budget | undefined> {
     return withRepositoryErrorHandling(async () => {
-      const db = await getDatabase();
-      return db.budgets.where('[year+month]').equals([year, month]).first();
+      const { data, error } = await supabase.from('budgets').select('*').eq('year', year).eq('month', month).maybeSingle();
+      if (error) throw error;
+      return data ? this.toRecord(data as BudgetRow) : undefined;
     }, 'load budget for month');
   }
 

@@ -2,7 +2,6 @@ import { useState, type FormEvent } from 'react';
 import { CURRENCIES, type CurrencyCode } from '../types';
 import { settingsRepository } from '../repositories';
 import { toMinorUnits } from '../utils/currency';
-import { setPref, PREF_KEYS } from '../utils/localPrefs';
 import { Button } from './common/Button';
 import { InputField, SelectField } from './common/FormField';
 
@@ -26,12 +25,12 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     try {
       await settingsRepository.update({
         displayName: displayName.trim(),
+        onboardingCompleted: true,
         currency,
         defaultMonthlyBudget: toMinorUnits(Number(defaultBudget) || 0, currency),
         startingBalance: toMinorUnits(Number(startingBalance) || 0, currency),
         firstDayOfBudgetMonth: firstDay,
       });
-      setPref(PREF_KEYS.onboardingCompleted, true);
       onComplete();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save your preferences. Please try again.');
@@ -40,9 +39,16 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     }
   };
 
-  const handleSkip = () => {
-    setPref(PREF_KEYS.onboardingCompleted, true);
-    onComplete();
+  const handleSkip = async () => {
+    setSaving(true);
+    try {
+      await settingsRepository.update({ onboardingCompleted: true });
+      onComplete();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not continue. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -51,14 +57,15 @@ export function Onboarding({ onComplete }: OnboardingProps) {
         <div className="mb-2 text-3xl" aria-hidden="true">💸</div>
         <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Welcome to ExpenseFlow</h1>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          A private, local-first expense and budget tracker. Set a few preferences to get started — you can change these
-          anytime in Settings.
+          A personal expense and budget tracker that syncs across your devices. Set a few preferences to get started —
+          you can change these anytime in Settings.
         </p>
 
         <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
-          Your financial information is stored only in this browser. It is not uploaded to a server or synchronized
-          between devices. Export regular backups to avoid losing your information. Anyone with access to this same
-          unlocked browser profile can also access this data — local storage is not encrypted or fully secure.
+          Your financial information is stored in your account and synced across any device you sign in on. It's
+          private to your account — protected by your password and database access rules — but it isn't end-to-end
+          encrypted, so treat your password like you would for any financial account. Export regular backups to avoid
+          losing your information.
         </div>
 
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">

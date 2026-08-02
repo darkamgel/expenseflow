@@ -1,8 +1,10 @@
 import type { Category } from '../types';
 import { BaseRepository } from './baseRepository';
-import { generateId } from '../utils/id';
 import { withRepositoryErrorHandling } from './errors';
-import { getDatabase } from '../db/database';
+import { supabase } from '../supabase/client';
+import type { Database } from '../supabase/database.types';
+
+type CategoryRow = Database['public']['Tables']['categories']['Row'];
 
 export const DEFAULT_CATEGORIES: Array<Pick<Category, 'name' | 'icon' | 'color'>> = [
   { name: 'Food and dining', icon: '🍽️', color: '#f97316' },
@@ -23,9 +25,37 @@ export const DEFAULT_CATEGORIES: Array<Pick<Category, 'name' | 'icon' | 'color'>
   { name: 'Other', icon: '📦', color: '#94a3b8' },
 ];
 
-class CategoryRepository extends BaseRepository<Category> {
+class CategoryRepository extends BaseRepository<Category, CategoryRow> {
   constructor() {
     super('categories', 'category');
+  }
+
+  protected toRecord(row: CategoryRow): Category {
+    return {
+      id: row.id,
+      name: row.name,
+      icon: row.icon,
+      color: row.color,
+      isDefault: row.is_default,
+      status: row.status as Category['status'],
+      sortOrder: row.sort_order,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  protected toRow(record: Category): Record<string, unknown> {
+    return {
+      id: record.id,
+      name: record.name,
+      icon: record.icon,
+      color: record.color,
+      is_default: record.isDefault,
+      status: record.status,
+      sort_order: record.sortOrder,
+      created_at: record.createdAt,
+      updated_at: record.updatedAt,
+    };
   }
 
   async getActive(): Promise<Category[]> {
@@ -37,18 +67,19 @@ class CategoryRepository extends BaseRepository<Category> {
     await withRepositoryErrorHandling(async () => {
       const count = await this.count();
       if (count > 0) return;
-      const db = await getDatabase();
       const now = Date.now();
-      const records: Category[] = DEFAULT_CATEGORIES.map((c, index) => ({
-        ...c,
-        id: generateId(),
-        isDefault: true,
+      const rows = DEFAULT_CATEGORIES.map((c, index) => ({
+        name: c.name,
+        icon: c.icon,
+        color: c.color,
+        is_default: true,
         status: 'active',
-        sortOrder: index,
-        createdAt: now,
-        updatedAt: now,
+        sort_order: index,
+        created_at: now,
+        updated_at: now,
       }));
-      await db.categories.bulkAdd(records);
+      const { error } = await supabase.from('categories').insert(rows);
+      if (error) throw error;
     }, 'seed default categories');
   }
 
@@ -56,13 +87,15 @@ class CategoryRepository extends BaseRepository<Category> {
    * archive it instead so historical expenses keep a valid category reference. */
   async isInUse(categoryId: string): Promise<boolean> {
     return withRepositoryErrorHandling(async () => {
-      const db = await getDatabase();
-      const expenseCount = await db.expenses.where('categoryId').equals(categoryId).count();
-      if (expenseCount > 0) return true;
-      const recurringCount = await db.recurringExpenses.where('categoryId').equals(categoryId).count();
-      if (recurringCount > 0) return true;
-      const budgetCount = await db.categoryBudgets.where('categoryId').equals(categoryId).count();
-      return budgetCount > 0;
+      const [expenses, recurring, categoryBudgets] = await Promise.all([
+        supabase.from('expenses').select('id', { count: 'exact', head: true }).eq('category_id', categoryId),
+        supabase.from('recurring_expenses').select('id', { count: 'exact', head: true }).eq('category_id', categoryId),
+        supabase.from('category_budgets').select('id', { count: 'exact', head: true }).eq('category_id', categoryId),
+      ]);
+      if (expenses.error) throw expenses.error;
+      if (recurring.error) throw recurring.error;
+      if (categoryBudgets.error) throw categoryBudgets.error;
+      return (expenses.count ?? 0) > 0 || (recurring.count ?? 0) > 0 || (categoryBudgets.count ?? 0) > 0;
     }, 'check category usage');
   }
 

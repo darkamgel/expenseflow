@@ -1,9 +1,12 @@
 import type { Expense, ExpenseFilters, ExpenseSortField, SortDirection } from '../types';
 import { BaseRepository } from './baseRepository';
 import { withRepositoryErrorHandling } from './errors';
-import { getDatabase } from '../db/database';
+import { supabase } from '../supabase/client';
+import type { Database } from '../supabase/database.types';
 import { receiptRepository } from './receiptRepository';
 import { isDateKeyInRange } from '../utils/date';
+
+type ExpenseRow = Database['public']['Tables']['expenses']['Row'];
 
 function matchesFilters(expense: Expense, filters: ExpenseFilters): boolean {
   if (filters.dateFrom && expense.date < filters.dateFrom) return false;
@@ -53,36 +56,80 @@ function sortExpenses(
   return direction === 'desc' ? sorted.reverse() : sorted;
 }
 
-class ExpenseRepository extends BaseRepository<Expense> {
+class ExpenseRepository extends BaseRepository<Expense, ExpenseRow> {
   constructor() {
     super('expenses', 'expense');
   }
 
+  protected toRecord(row: ExpenseRow): Expense {
+    return {
+      id: row.id,
+      title: row.title,
+      amount: row.amount,
+      categoryId: row.category_id,
+      date: row.date,
+      time: row.time,
+      paymentMethodId: row.payment_method_id ?? undefined,
+      merchant: row.merchant ?? undefined,
+      notes: row.notes ?? undefined,
+      tags: row.tags ?? [],
+      recurringExpenseId: row.recurring_expense_id ?? undefined,
+      receiptId: row.receipt_id ?? undefined,
+      isSample: row.is_sample,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  protected toRow(record: Expense): Record<string, unknown> {
+    return {
+      id: record.id,
+      title: record.title,
+      amount: record.amount,
+      category_id: record.categoryId,
+      date: record.date,
+      time: record.time,
+      payment_method_id: record.paymentMethodId ?? null,
+      merchant: record.merchant ?? null,
+      notes: record.notes ?? null,
+      tags: record.tags,
+      recurring_expense_id: record.recurringExpenseId ?? null,
+      receipt_id: record.receiptId ?? null,
+      is_sample: record.isSample ?? false,
+      created_at: record.createdAt,
+      updated_at: record.updatedAt,
+    };
+  }
+
   async getByDateRange(from: string, to: string): Promise<Expense[]> {
     return withRepositoryErrorHandling(async () => {
-      const db = await getDatabase();
-      return db.expenses.where('date').between(from, to, true, true).toArray();
+      const { data, error } = await supabase.from('expenses').select('*').gte('date', from).lte('date', to);
+      if (error) throw error;
+      return (data ?? []).map((row) => this.toRecord(row));
     }, 'load expenses for date range');
   }
 
   async getByCategory(categoryId: string): Promise<Expense[]> {
     return withRepositoryErrorHandling(async () => {
-      const db = await getDatabase();
-      return db.expenses.where('categoryId').equals(categoryId).toArray();
+      const { data, error } = await supabase.from('expenses').select('*').eq('category_id', categoryId);
+      if (error) throw error;
+      return (data ?? []).map((row) => this.toRecord(row));
     }, 'load expenses for category');
   }
 
   async getByPaymentMethod(paymentMethodId: string): Promise<Expense[]> {
     return withRepositoryErrorHandling(async () => {
-      const db = await getDatabase();
-      return db.expenses.where('paymentMethodId').equals(paymentMethodId).toArray();
+      const { data, error } = await supabase.from('expenses').select('*').eq('payment_method_id', paymentMethodId);
+      if (error) throw error;
+      return (data ?? []).map((row) => this.toRecord(row));
     }, 'load expenses for payment method');
   }
 
   async getByRecurringExpense(recurringExpenseId: string): Promise<Expense[]> {
     return withRepositoryErrorHandling(async () => {
-      const db = await getDatabase();
-      return db.expenses.where('recurringExpenseId').equals(recurringExpenseId).toArray();
+      const { data, error } = await supabase.from('expenses').select('*').eq('recurring_expense_id', recurringExpenseId);
+      if (error) throw error;
+      return (data ?? []).map((row) => this.toRecord(row));
     }, 'load expenses for recurring series');
   }
 
@@ -124,7 +171,7 @@ class ExpenseRepository extends BaseRepository<Expense> {
     }, 'bulk delete expenses');
   }
 
-  /** In-memory helper for callers that already have a loaded expense list (avoids re-querying IDB per chart). */
+  /** In-memory helper for callers that already have a loaded expense list (avoids re-querying per chart). */
   filterInMemory(expenses: Expense[], from: string, to: string): Expense[] {
     return expenses.filter((e) => isDateKeyInRange(e.date, from, to));
   }

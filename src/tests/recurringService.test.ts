@@ -1,7 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../supabase/client');
+
+import { __resetFakeSupabase } from '../supabase/__mocks__/client';
 import { computeNextOccurrence, generateDueRecurringExpenses } from '../services/recurringService';
-import { recurringExpenseRepository, expenseRepository, categoryRepository } from '../repositories';
-import { resetTestDatabase } from './testDb';
+import { recurringExpenseRepository } from '../repositories/recurringExpenseRepository';
+import { expenseRepository } from '../repositories/expenseRepository';
+import { categoryRepository } from '../repositories/categoryRepository';
 
 describe('computeNextOccurrence', () => {
   it('advances daily', () => {
@@ -29,15 +34,15 @@ describe('computeNextOccurrence', () => {
 
 describe('generateDueRecurringExpenses', () => {
   beforeEach(async () => {
-    await resetTestDatabase();
+    __resetFakeSupabase();
     await categoryRepository.ensureSeeded();
   });
 
   it('generates a missed expense and advances nextOccurrence', async () => {
     const categories = await categoryRepository.getActive();
     const categoryId = categories[0].id;
-
     const pastDate = '2020-01-01';
+
     await recurringExpenseRepository.create({
       title: 'Rent',
       amount: 90000,

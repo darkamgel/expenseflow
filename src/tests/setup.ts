@@ -1,4 +1,3 @@
-import 'fake-indexeddb/auto';
 import '@testing-library/jest-dom/vitest';
 
 // jsdom doesn't implement the Blob URL APIs; backup/CSV export code calls them

@@ -1,12 +1,16 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../supabase/client');
+
+import { __resetFakeSupabase } from '../supabase/__mocks__/client';
 import { exportBackup, importBackup, validateBackupFile } from '../repositories/backupService';
-import { categoryRepository, expenseRepository } from '../repositories';
+import { categoryRepository } from '../repositories/categoryRepository';
+import { expenseRepository } from '../repositories/expenseRepository';
 import { BACKUP_SCHEMA_VERSION, type BackupFile } from '../types/backup';
-import { resetTestDatabase } from './testDb';
 
 describe('exportBackup', () => {
   beforeEach(async () => {
-    await resetTestDatabase();
+    __resetFakeSupabase();
     await categoryRepository.ensureSeeded();
   });
 
@@ -31,8 +35,11 @@ describe('exportBackup', () => {
 });
 
 describe('validateBackupFile', () => {
+  beforeEach(async () => {
+    __resetFakeSupabase();
+  });
+
   it('accepts a well-formed backup', async () => {
-    await resetTestDatabase();
     await categoryRepository.ensureSeeded();
     const backup = await exportBackup(false);
     const result = validateBackupFile(backup);
@@ -78,7 +85,7 @@ describe('validateBackupFile', () => {
 
 describe('importBackup merge mode', () => {
   beforeEach(async () => {
-    await resetTestDatabase();
+    __resetFakeSupabase();
     await categoryRepository.ensureSeeded();
   });
 
@@ -94,7 +101,6 @@ describe('importBackup merge mode', () => {
     });
 
     const backup: BackupFile = await exportBackup(false);
-    // Simulate importing a backup that contains the same expense plus one new one.
     const newExpense = { ...expense, id: 'new-expense-id', title: 'Gas' };
     backup.data.expenses = [expense, newExpense];
 
@@ -110,7 +116,7 @@ describe('importBackup merge mode', () => {
 
 describe('importBackup replace mode', () => {
   beforeEach(async () => {
-    await resetTestDatabase();
+    __resetFakeSupabase();
     await categoryRepository.ensureSeeded();
   });
 

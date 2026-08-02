@@ -1,11 +1,54 @@
 import type { PaymentMethod } from '../types';
 import { BaseRepository } from './baseRepository';
 import { withRepositoryErrorHandling } from './errors';
-import { getDatabase } from '../db/database';
+import { supabase } from '../supabase/client';
+import type { Database } from '../supabase/database.types';
 
-class PaymentMethodRepository extends BaseRepository<PaymentMethod> {
+type PaymentMethodRow = Database['public']['Tables']['payment_methods']['Row'];
+
+class PaymentMethodRepository extends BaseRepository<PaymentMethod, PaymentMethodRow> {
   constructor() {
-    super('paymentMethods', 'payment method');
+    super('payment_methods', 'payment method');
+  }
+
+  protected toRecord(row: PaymentMethodRow): PaymentMethod {
+    return {
+      id: row.id,
+      name: row.name,
+      type: row.type as PaymentMethod['type'],
+      issuer: row.issuer ?? undefined,
+      lastFourDigits: row.last_four_digits ?? undefined,
+      creditLimit: row.credit_limit ?? undefined,
+      currentBalance: row.current_balance ?? undefined,
+      billingCycleStartDay: row.billing_cycle_start_day ?? undefined,
+      paymentDueDay: row.payment_due_day ?? undefined,
+      color: row.color,
+      notes: row.notes ?? undefined,
+      status: row.status as PaymentMethod['status'],
+      isSample: row.is_sample,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  protected toRow(record: PaymentMethod): Record<string, unknown> {
+    return {
+      id: record.id,
+      name: record.name,
+      type: record.type,
+      issuer: record.issuer ?? null,
+      last_four_digits: record.lastFourDigits ?? null,
+      credit_limit: record.creditLimit ?? null,
+      current_balance: record.currentBalance ?? null,
+      billing_cycle_start_day: record.billingCycleStartDay ?? null,
+      payment_due_day: record.paymentDueDay ?? null,
+      color: record.color,
+      notes: record.notes ?? null,
+      status: record.status,
+      is_sample: record.isSample ?? false,
+      created_at: record.createdAt,
+      updated_at: record.updatedAt,
+    };
   }
 
   async getActive(): Promise<PaymentMethod[]> {
@@ -15,11 +58,13 @@ class PaymentMethodRepository extends BaseRepository<PaymentMethod> {
 
   async isInUse(paymentMethodId: string): Promise<boolean> {
     return withRepositoryErrorHandling(async () => {
-      const db = await getDatabase();
-      const expenseCount = await db.expenses.where('paymentMethodId').equals(paymentMethodId).count();
-      if (expenseCount > 0) return true;
-      const recurringCount = await db.recurringExpenses.where('paymentMethodId').equals(paymentMethodId).count();
-      return recurringCount > 0;
+      const [expenses, recurring] = await Promise.all([
+        supabase.from('expenses').select('id', { count: 'exact', head: true }).eq('payment_method_id', paymentMethodId),
+        supabase.from('recurring_expenses').select('id', { count: 'exact', head: true }).eq('payment_method_id', paymentMethodId),
+      ]);
+      if (expenses.error) throw expenses.error;
+      if (recurring.error) throw recurring.error;
+      return (expenses.count ?? 0) > 0 || (recurring.count ?? 0) > 0;
     }, 'check payment method usage');
   }
 

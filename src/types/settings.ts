@@ -4,9 +4,10 @@ export const CURRENCIES = ['USD', 'EUR', 'GBP', 'NPR', 'INR', 'CAD', 'AUD', 'JPY
 export type CurrencyCode = (typeof CURRENCIES)[number];
 
 export interface ApplicationSettings extends BaseRecord {
-  /** Singleton record id, always 'default'. */
+  /** Singleton record id — the user's own auth uid. */
   id: string;
   displayName: string;
+  onboardingCompleted: boolean;
   currency: CurrencyCode;
   defaultMonthlyBudget: number; // smallest currency unit
   /** Lump sum of money you're starting with (e.g. current account balance), rather

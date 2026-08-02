@@ -1,10 +1,30 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { categoryRepository, expenseRepository, paymentMethodRepository } from '../repositories';
-import { resetTestDatabase } from './testDb';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../supabase/client');
+
+import { __resetFakeSupabase } from '../supabase/__mocks__/client';
+import { categoryRepository } from '../repositories/categoryRepository';
+import { expenseRepository } from '../repositories/expenseRepository';
+import { paymentMethodRepository } from '../repositories/paymentMethodRepository';
+
+beforeEach(() => {
+  __resetFakeSupabase();
+});
+
+describe('categoryRepository.ensureSeeded', () => {
+  it('seeds default categories only when the table is empty', async () => {
+    await categoryRepository.ensureSeeded();
+    const first = await categoryRepository.getAll();
+    expect(first.length).toBeGreaterThan(0);
+
+    await categoryRepository.ensureSeeded();
+    const second = await categoryRepository.getAll();
+    expect(second).toHaveLength(first.length);
+  });
+});
 
 describe('expenseRepository.duplicate', () => {
   beforeEach(async () => {
-    await resetTestDatabase();
     await categoryRepository.ensureSeeded();
   });
 
@@ -33,7 +53,6 @@ describe('expenseRepository.duplicate', () => {
 
 describe('categoryRepository.deleteOrArchive', () => {
   beforeEach(async () => {
-    await resetTestDatabase();
     await categoryRepository.ensureSeeded();
   });
 
@@ -73,7 +92,6 @@ describe('categoryRepository.deleteOrArchive', () => {
 
 describe('paymentMethodRepository.deleteIfUnused', () => {
   beforeEach(async () => {
-    await resetTestDatabase();
     await categoryRepository.ensureSeeded();
   });
 

@@ -38,5 +38,4 @@ export const PREF_KEYS = {
   theme: 'expenseflow:theme',
   dashboardLayout: 'expenseflow:dashboardLayout',
   lastDateFilter: 'expenseflow:lastDateFilter',
-  onboardingCompleted: 'expenseflow:onboardingCompleted',
 } as const;

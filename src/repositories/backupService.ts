@@ -1,9 +1,19 @@
-import type { Table } from 'dexie';
-import { getDatabase } from '../db/database';
+import { supabase } from '../supabase/client';
+import { getCurrentUserId } from '../supabase/auth';
 import { withRepositoryErrorHandling } from './errors';
-import { blobToBase64, base64ToBlob, downloadTextFile } from '../services/blobUtils';
+import { base64ToBlob, blobToBase64, downloadTextFile } from '../services/blobUtils';
 import { metadataRepository } from './metadataRepository';
-import { METADATA_KEYS } from '../types';
+import { categoryRepository } from './categoryRepository';
+import { paymentMethodRepository } from './paymentMethodRepository';
+import { expenseRepository } from './expenseRepository';
+import { budgetRepository } from './budgetRepository';
+import { categoryBudgetRepository } from './categoryBudgetRepository';
+import { incomeRepository } from './incomeRepository';
+import { recurringExpenseRepository } from './recurringExpenseRepository';
+import { notificationRepository } from './notificationRepository';
+import { settingsRepository } from './settingsRepository';
+import { receiptRepository } from './receiptRepository';
+import { METADATA_KEYS, type BaseRecord } from '../types';
 import {
   BACKUP_SCHEMA_VERSION,
   APP_VERSION,
@@ -16,19 +26,18 @@ import {
 
 export async function exportBackup(includeReceipts: boolean): Promise<BackupFile> {
   return withRepositoryErrorHandling(async () => {
-    const db = await getDatabase();
     const [expenses, budgets, categoryBudgets, categories, paymentMethods, incomes, recurringExpenses, notifications, settings, receipts] =
       await Promise.all([
-        db.expenses.toArray(),
-        db.budgets.toArray(),
-        db.categoryBudgets.toArray(),
-        db.categories.toArray(),
-        db.paymentMethods.toArray(),
-        db.incomes.toArray(),
-        db.recurringExpenses.toArray(),
-        db.notifications.toArray(),
-        db.settings.toArray(),
-        includeReceipts ? db.receipts.toArray() : Promise.resolve([]),
+        expenseRepository.getAll(),
+        budgetRepository.getAll(),
+        categoryBudgetRepository.getAll(),
+        categoryRepository.getAll(),
+        paymentMethodRepository.getAll(),
+        incomeRepository.getAll(),
+        recurringExpenseRepository.getAll(),
+        notificationRepository.getAll(),
+        settingsRepository.get().then((s) => [s]),
+        includeReceipts ? receiptRepository.getAllWithBlobs() : Promise.resolve([]),
       ]);
 
     const serializedReceipts: SerializedReceipt[] = await Promise.all(
@@ -140,117 +149,120 @@ export interface ImportSummary {
   safetyBackupFileName?: string;
 }
 
+interface PutRepository<T extends BaseRecord> {
+  getAll: () => Promise<T[]>;
+  put: (record: T) => Promise<T>;
+}
+
+async function importRecords<T extends BaseRecord>(
+  repo: PutRepository<T>,
+  records: T[],
+  mode: ImportMode
+): Promise<{ created: number; skipped: number }> {
+  if (!records.length) return { created: 0, skipped: 0 };
+
+  let existingIds = new Set<string>();
+  if (mode === 'merge') {
+    existingIds = new Set((await repo.getAll()).map((r) => r.id));
+  }
+
+  let created = 0;
+  let skipped = 0;
+  for (const record of records) {
+    if (mode === 'merge' && existingIds.has(record.id)) {
+      skipped += 1;
+      continue;
+    }
+    await repo.put(record);
+    created += 1;
+  }
+  return { created, skipped };
+}
+
+/** Permanently clears every table (and receipt files) for the signed-in user.
+ * Callers must gate this behind confirmation — there is no undo once it resolves. */
+export async function deleteAllLocalData(): Promise<void> {
+  return withRepositoryErrorHandling(async () => {
+    const userId = await getCurrentUserId();
+    await Promise.all([
+      expenseRepository.clear(),
+      categoryRepository.clear(),
+      paymentMethodRepository.clear(),
+      budgetRepository.clear(),
+      categoryBudgetRepository.clear(),
+      incomeRepository.clear(),
+      recurringExpenseRepository.clear(),
+      notificationRepository.clear(),
+      supabase.from('settings').delete().eq('user_id', userId),
+      supabase.from('metadata').delete().eq('user_id', userId),
+      supabase.from('receipts').delete().eq('user_id', userId),
+    ]);
+
+    const { data: files } = await supabase.storage.from('receipts').list(userId);
+    if (files?.length) {
+      await supabase.storage.from('receipts').remove(files.map((f) => `${userId}/${f.name}`));
+    }
+  }, 'delete all data');
+}
+
 export async function importBackup(backup: BackupFile, mode: ImportMode): Promise<ImportSummary> {
   return withRepositoryErrorHandling(async () => {
-    const db = await getDatabase();
     let safetyBackupFileName: string | undefined;
 
     if (mode === 'replace') {
       const safety = await exportBackup(true);
       safetyBackupFileName = backupFileName(new Date()).replace('backup', 'safety-backup');
       downloadTextFile(safetyBackupFileName, JSON.stringify(safety, null, 2));
+      await deleteAllLocalData();
     }
 
     let created = 0;
     let skipped = 0;
 
-    await db.transaction(
-      'rw',
-      [db.expenses, db.budgets, db.categoryBudgets, db.categories, db.paymentMethods, db.incomes, db.recurringExpenses, db.notifications, db.settings, db.receipts],
-      async () => {
-        if (mode === 'replace') {
-          await Promise.all([
-            db.expenses.clear(),
-            db.budgets.clear(),
-            db.categoryBudgets.clear(),
-            db.categories.clear(),
-            db.paymentMethods.clear(),
-            db.incomes.clear(),
-            db.recurringExpenses.clear(),
-            db.notifications.clear(),
-            db.receipts.clear(),
-          ]);
+    const tally = (result: { created: number; skipped: number }) => {
+      created += result.created;
+      skipped += result.skipped;
+    };
+
+    // Each table is imported as its own set of requests (Supabase's REST API
+    // doesn't expose cross-table transactions to the client), so a failure
+    // partway through can leave a partial import — the merge/replace + safety
+    // backup flow above is the safeguard, not a database-level rollback.
+    tally(await importRecords(categoryRepository, backup.data.categories, mode));
+    tally(await importRecords(paymentMethodRepository, backup.data.paymentMethods, mode));
+    tally(await importRecords(expenseRepository, backup.data.expenses, mode));
+    tally(await importRecords(budgetRepository, backup.data.budgets, mode));
+    tally(await importRecords(categoryBudgetRepository, backup.data.categoryBudgets, mode));
+    tally(await importRecords(incomeRepository, backup.data.incomes, mode));
+    tally(await importRecords(recurringExpenseRepository, backup.data.recurringExpenses, mode));
+    tally(await importRecords(notificationRepository, backup.data.notifications, mode));
+
+    if (backup.data.receipts.length) {
+      const existingReceiptIds = mode === 'merge' ? new Set(await receiptRepository.listIds()) : new Set<string>();
+      for (const r of backup.data.receipts) {
+        if (mode === 'merge' && existingReceiptIds.has(r.id)) {
+          skipped += 1;
+          continue;
         }
-
-        const upsert = async <T extends { id: string }>(dbTable: Table<T, string>, records: T[]) => {
-          if (mode === 'replace') {
-            await dbTable.bulkPut(records);
-            created += records.length;
-            return;
-          }
-          const existingIds = new Set(await dbTable.toCollection().primaryKeys());
-          const toInsert = records.filter((r) => !existingIds.has(r.id));
-          if (toInsert.length) await dbTable.bulkPut(toInsert);
-          created += toInsert.length;
-          skipped += records.length - toInsert.length;
-        };
-
-        await upsert(db.expenses, backup.data.expenses);
-        await upsert(db.categories, backup.data.categories);
-        await upsert(db.paymentMethods, backup.data.paymentMethods);
-        await upsert(db.budgets, backup.data.budgets);
-        await upsert(db.categoryBudgets, backup.data.categoryBudgets);
-        await upsert(db.incomes, backup.data.incomes);
-        await upsert(db.recurringExpenses, backup.data.recurringExpenses);
-        await upsert(db.notifications, backup.data.notifications);
-
-        if (backup.data.receipts.length) {
-          const existingReceiptIds = mode === 'merge' ? new Set(await db.receipts.toCollection().primaryKeys()) : new Set<string>();
-          for (const r of backup.data.receipts) {
-            if (mode === 'merge' && existingReceiptIds.has(r.id)) {
-              skipped += 1;
-              continue;
-            }
-            await db.receipts.put({
-              id: r.id,
-              expenseId: r.expenseId,
-              fileName: r.fileName,
-              mimeType: r.mimeType,
-              sizeBytes: r.sizeBytes,
-              blob: base64ToBlob(r.data, r.mimeType),
-              createdAt: r.createdAt,
-              updatedAt: r.updatedAt,
-            });
-            created += 1;
-          }
-        }
-
-        if (backup.data.settings.length) {
-          const latestSettings = backup.data.settings[backup.data.settings.length - 1];
-          if (mode === 'replace') {
-            await db.settings.put(latestSettings);
-          }
-        }
+        await receiptRepository.restore({
+          id: r.id,
+          expenseId: r.expenseId,
+          fileName: r.fileName,
+          mimeType: r.mimeType,
+          sizeBytes: r.sizeBytes,
+          blob: base64ToBlob(r.data, r.mimeType),
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+        });
+        created += 1;
       }
-    );
+    }
+
+    if (mode === 'replace' && backup.data.settings.length) {
+      const latestSettings = backup.data.settings[backup.data.settings.length - 1];
+      await settingsRepository.update(latestSettings);
+    }
 
     return { mode, created, skipped, safetyBackupFileName };
   }, 'import backup');
-}
-
-/** Permanently clears every local data store. Callers must gate this behind the
- * "type DELETE to confirm" flow — there is no undo once this resolves. */
-export async function deleteAllLocalData(): Promise<void> {
-  return withRepositoryErrorHandling(async () => {
-    const db = await getDatabase();
-    await db.transaction(
-      'rw',
-      [db.expenses, db.budgets, db.categoryBudgets, db.categories, db.paymentMethods, db.incomes, db.recurringExpenses, db.notifications, db.settings, db.receipts, db.metadata],
-      async () => {
-        await Promise.all([
-          db.expenses.clear(),
-          db.budgets.clear(),
-          db.categoryBudgets.clear(),
-          db.categories.clear(),
-          db.paymentMethods.clear(),
-          db.incomes.clear(),
-          db.recurringExpenses.clear(),
-          db.notifications.clear(),
-          db.settings.clear(),
-          db.receipts.clear(),
-          db.metadata.clear(),
-        ]);
-      }
-    );
-  }, 'delete all local data');
 }

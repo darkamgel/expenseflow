@@ -8,6 +8,7 @@ import { useSettings } from '../contexts/SettingsContext';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
 import { useToast } from '../contexts/ToastContext';
 import { useConfirm } from '../contexts/ConfirmContext';
+import { useAuth } from '../contexts/AuthContext';
 import { toMinorUnits, fromMinorUnits } from '../utils/currency';
 import { loadSampleData, clearSampleData } from '../services/sampleDataService';
 
@@ -16,6 +17,7 @@ export function Settings() {
   const { mode, setMode } = useTheme();
   const { showToast } = useToast();
   const confirm = useConfirm();
+  const { user, signOut } = useAuth();
 
   const [displayName, setDisplayName] = useState(settings?.displayName ?? '');
   const [currency, setCurrency] = useState<CurrencyCode>(settings?.currency ?? 'USD');
@@ -81,13 +83,21 @@ export function Settings() {
       <PageHeader title="Settings" />
 
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-relaxed text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
-        <strong>Privacy notice:</strong> Your financial information is stored only in this browser. It is not uploaded to
-        a server or synchronized between devices. Export regular backups to avoid losing your information. Local storage
-        is not encrypted or fully secure — anyone with access to this same unlocked browser profile can also access this
-        data.
+        <strong>Privacy notice:</strong> Your financial information is stored in your account and synced across every
+        device you sign in on. It's protected by your password and database access rules that restrict it to your
+        account only — but it isn't end-to-end encrypted, so anyone who gains access to your account credentials could
+        access this data. Export regular backups to avoid losing your information.
       </div>
 
       <Card className="my-5">
+        <h2 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-200">Account</h2>
+        <p className="mb-3 text-sm text-slate-500 dark:text-slate-400">Signed in as {user?.email}</p>
+        <Button variant="secondary" onClick={signOut}>
+          Sign out
+        </Button>
+      </Card>
+
+      <Card className="mb-5">
         <h2 className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-200">Appearance</h2>
         <div className="flex gap-2">
           {(['light', 'dark', 'system'] as ThemeMode[]).map((option) => (
